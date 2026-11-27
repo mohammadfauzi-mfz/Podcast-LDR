@@ -9,6 +9,7 @@ const SHEET_RESP = 'Form Responses 1';
 const SHEET_DB = 'DB_TKPanen';
 const SHEET_REKAP = 'Rekap';
 const SHEET_TOPIK = 'Topik';
+const SHEET_TL = 'TindakLanjut';
 const DEFAULT_TOPIK = [
   ['Air bersih / air minum', 'air!, drum, gentong, kentong, ember, sumur, mck!'],
   ['Akses panen (titi, jalan, teras)', 'titi, tangga, jalan, ereng, akses, pasar pikul, jb!, teras, langsir, pelangsir'],
@@ -30,6 +31,7 @@ const FOLDER_NAME = 'Podcast LDR - Foto Aplikasi';
 function setup() {
   const ss = SpreadsheetApp.getActive();
   ensureTopik_(ss);
+  tlSheet_(ss);
   Logger.log('Folder foto: ' + folder_().getUrl());
   Logger.log('Master TK: ' + readMaster_(ss).length + ' | Respon: ' + readResponses_(ss).length);
 }
@@ -58,6 +60,7 @@ function doPost(e) {
     const d = JSON.parse(e.postData.contents);
     if (d.key !== API_KEY) return json_({ ok: false, error: 'Kunci API salah' });
     lock.waitLock(30000);
+    if (d.action === 'tl') return saveTL_(d);
     const props = PropertiesService.getScriptProperties();
     if (d.id && props.getProperty('sent_' + d.id)) return json_({ ok: true, dup: true });
 
@@ -186,14 +189,22 @@ function readResponses_(ss) {
   if (!sh || sh.getLastRow() < 2) return [];
   const tz = ss.getSpreadsheetTimeZone();
   const v = sh.getRange(2, 1, sh.getLastRow() - 1, 14).getValues();
-  return v.filter(r => r[0] !== '' && r[5] !== '').map(r => ({
+  const tl = readTL_(ss);
+  return v.filter(r => r[0] !== '' && r[5] !== '').map(r => {
+    const npks = String(r[6]).split(/[,;\/&]+/).map(pad_).filter(x => x);
+    const key = fmt_(r[0], tz, 'yyyyMMddHHmmss') + '|' + (npks[0] || '');
+    const t = tl[key] || {};
+    return {
+    key: key,
+    tlStatus: t.status || '', tlPj: t.pj || '', tlTarget: t.target || '', tlCatatan: t.catatan || '',
+    tlUpdated: t.updated || '', tlOleh: t.oleh || '',
     ts: fmt_(r[0], tz, 'yyyy-MM-dd HH:mm'),
     email: String(r[1]),
     afd: normAfd_(r[3]),
     tgl: fmt_(r[4], tz, 'yyyy-MM-dd'),
     nama: String(r[5]).trim(),
     npk: String(r[6]).trim(),
-    npks: String(r[6]).split(/[,;\/&]+/).map(pad_).filter(x => x),
+    npks: npks,
     tk: String(r[7]).trim(),
     kp: String(r[8]).trim(),
     kf: String(r[9]).trim(),
@@ -202,7 +213,54 @@ function readResponses_(ss) {
     lossRaw: String(r[12]),
     loss: parseLoss_(r[12]),
     kelas: String(r[13]).replace(/kelas/i, '').trim().toUpperCase()
-  }));
+    };
+  });
+}
+
+/* ---------- tindak lanjut keluhan ---------- */
+
+function tlSheet_(ss) {
+  let sh = ss.getSheetByName(SHEET_TL);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_TL);
+    sh.getRange(1, 1, 1, 10).setValues([['Kunci', 'NPK', 'Nama', 'Afdeling', 'Status', 'Penanggung Jawab', 'Target', 'Catatan', 'Diperbarui', 'Oleh']]).setFontWeight('bold');
+    sh.getRange('A:A').setNumberFormat('@');
+  }
+  return sh;
+}
+
+function readTL_(ss) {
+  const out = {};
+  const sh = ss.getSheetByName(SHEET_TL);
+  if (!sh || sh.getLastRow() < 2) return out;
+  const tz = ss.getSpreadsheetTimeZone();
+  sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues().forEach(r => {
+    if (String(r[0])) out[String(r[0])] = {
+      status: String(r[4]), pj: String(r[5]), target: fmt_(r[6], tz, 'yyyy-MM-dd'),
+      catatan: String(r[7]), updated: fmt_(r[8], tz, 'dd/MM/yyyy HH:mm'), oleh: String(r[9])
+    };
+  });
+  return out;
+}
+
+function saveTL_(d) {
+  const ss = SpreadsheetApp.getActive();
+  const tz = ss.getSpreadsheetTimeZone();
+  const sh = tlSheet_(ss);
+  if (!d.rkey) return json_({ ok: false, error: 'Kunci data kosong' });
+  const n = sh.getLastRow();
+  let row = -1;
+  if (n >= 2) {
+    const keys = sh.getRange(2, 1, n - 1, 1).getValues();
+    for (let i = 0; i < keys.length; i++) if (String(keys[i][0]) === d.rkey) { row = i + 2; break; }
+  }
+  if (row < 0) row = n + 1;
+  sh.getRange(row, 1, 1, 2).setNumberFormat('@');
+  sh.getRange(row, 1, 1, 10).setValues([[
+    d.rkey, String(d.npk || ''), d.nama || '', d.afdeling || '', d.status || '', d.pj || '',
+    d.target ? Utilities.parseDate(d.target, tz, 'yyyy-MM-dd') : '', d.catatan || '', new Date(), d.pengisi || ''
+  ]]);
+  return json_({ ok: true });
 }
 
 /* ---------- utilitas ---------- */

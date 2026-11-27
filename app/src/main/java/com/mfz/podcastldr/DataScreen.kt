@@ -1,8 +1,13 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.mfz.podcastldr
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import android.app.DatePickerDialog
+import org.json.JSONObject
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,14 +32,15 @@ fun DataScreen(state: AppState) {
     var q by rememberSaveable { mutableStateOf("") }
     var afd by rememberSaveable { mutableStateOf("") }
     var bulan by rememberSaveable { mutableStateOf("") }
+    var stF by rememberSaveable { mutableStateOf("") }
     var afdMenu by remember { mutableStateOf(false) }
     var blnMenu by remember { mutableStateOf(false) }
     var askShare by remember { mutableStateOf(false) }
     var detail by remember { mutableStateOf<Respon?>(null) }
     val months = remember(d) { d.responses.map { it.tgl.take(7) }.filter { it.length == 7 && it[4] == '-' }.distinct().sortedDescending() }
-    val list = remember(d, q, afd, bulan) {
+    val list = remember(d, q, afd, bulan, stF) {
         d.responses.filter {
-            (afd.isEmpty() || it.afd == afd) &&
+            (afd.isEmpty() || it.afd == afd) && (stF.isEmpty() || it.status == stF) &&
                 (bulan.isEmpty() || it.tgl.startsWith(bulan)) &&
                 (q.isBlank() || "${it.nama} ${it.npk} ${it.kp} ${it.kf} ${it.saran}".contains(q.trim(), true))
         }.sortedByDescending { it.ts }
@@ -66,6 +72,10 @@ fun DataScreen(state: AppState) {
             }
             FilledTonalIconButton(onClick = { askShare = true }, enabled = list.isNotEmpty()) { Icon(Icons.Default.Share, "Bagikan semua") }
         }
+        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            item { FilterChip(selected = stF.isEmpty(), onClick = { stF = "" }, label = { Text("Semua status") }) }
+            items(STATUS_LIST) { st -> FilterChip(selected = stF == st, onClick = { stF = st }, label = { Text(st) }) }
+        }
         Text("${list.size} data • ketuk ikon bagikan untuk mengirim semua hasil filter", Modifier.padding(horizontal = 14.dp), style = MaterialTheme.typography.labelMedium)
         LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(list) { r ->
@@ -75,6 +85,7 @@ fun DataScreen(state: AppState) {
                             Text(r.nama, Modifier.weight(1f), fontWeight = FontWeight.Bold)
                             if (r.kelas.isNotBlank()) Text("Kelas ${r.kelas}", color = kelasColor(r.kelas), fontWeight = FontWeight.Bold)
                         }
+                        Text("● ${r.status}" + (if (r.tlPj.isNotBlank()) " • PJ ${r.tlPj}" else ""), color = statusColor(r.status), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Text("${afdLabel(r.afd)} • NPK ${r.npk} • ${r.tk}", style = MaterialTheme.typography.labelMedium)
                         Text(
                             "Sarasehan ${fmtTgl(r.tgl)}" + (r.loss?.takeIf { r.tk.equals("Panen", true) }?.let { " • Losses ${fmt2(it)} kg/ha" } ?: ""),
@@ -124,6 +135,10 @@ fun DetailDialog(r: Respon, state: AppState, onDismiss: () -> Unit) {
         "Diisi oleh" to r.email,
         "Waktu input" to r.ts
     ).filter { it.second.isNotBlank() }
+    var st by remember { mutableStateOf(r.status) }
+    var pj by remember { mutableStateOf(r.tlPj) }
+    var target by remember { mutableStateOf(r.tlTarget) }
+    var cat by remember { mutableStateOf(r.tlCatatan) }
     ListDialog(r.nama, onDismiss, actions = {
         if (r.foto.isNotBlank()) TextButton(onClick = { openUrl(ctx, r.foto) }) { Text("Foto") }
         TextButton(onClick = { state.share(ctx, singleText(r), listOf(r), true) }) { Text("Bagikan") }
@@ -132,6 +147,36 @@ fun DetailDialog(r: Respon, state: AppState, onDismiss: () -> Unit) {
             rows.forEach { (k, v) ->
                 Text(k, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Text(v, Modifier.padding(bottom = 8.dp))
+            }
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            Text("Tindak Lanjut Keluhan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (r.tlUpdated.isNotBlank()) Text("Terakhir: ${r.tlUpdated} oleh ${r.tlOleh}", style = MaterialTheme.typography.labelSmall)
+            if (r.key.isBlank()) {
+                Text("Perbarui Code.gs (versi terbaru) untuk memakai fitur ini.", color = MaterialTheme.colorScheme.error)
+            } else {
+                Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    STATUS_LIST.take(3).forEach { s -> FilterChip(selected = st == s, onClick = { st = s }, label = { Text(s) }) }
+                }
+                FilterChip(selected = st == "Tidak perlu", onClick = { st = "Tidak perlu" }, label = { Text("Tidak perlu tindak lanjut") })
+                OutlinedTextField(pj, { pj = it }, Modifier.fillMaxWidth(), label = { Text("Penanggung jawab") }, singleLine = true)
+                OutlinedButton(onClick = {
+                    val c = java.util.Calendar.getInstance()
+                    val y = target.take(4).toIntOrNull() ?: c.get(java.util.Calendar.YEAR)
+                    val mo = (target.drop(5).take(2).toIntOrNull() ?: (c.get(java.util.Calendar.MONTH) + 1)) - 1
+                    val dd = target.drop(8).take(2).toIntOrNull() ?: c.get(java.util.Calendar.DAY_OF_MONTH)
+                    DatePickerDialog(ctx, { _, yy, mm, d2 -> target = "%04d-%02d-%02d".format(yy, mm + 1, d2) }, y, mo, dd).show()
+                }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    Text(if (target.isBlank()) "Pilih target selesai" else "Target: ${fmtTgl(target)}")
+                }
+                OutlinedTextField(cat, { cat = it }, Modifier.fillMaxWidth(), label = { Text("Catatan tindak lanjut") }, minLines = 2)
+                Button(onClick = {
+                    state.saveTL(
+                        JSONObject().put("rkey", r.key).put("npk", r.npk).put("nama", r.nama).put("afdeling", afdLabel(r.afd))
+                            .put("status", st).put("pj", pj.trim()).put("target", target).put("catatan", cat.trim())
+                    ) { onDismiss() }
+                }, enabled = !state.tlSaving, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    Text(if (state.tlSaving) "Menyimpan…" else "Simpan Tindak Lanjut")
+                }
             }
         }
     }

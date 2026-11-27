@@ -64,7 +64,7 @@ fun FormScreen(state: AppState) {
         else master.filter { it.nama.contains(q, true) || it.npk.contains(q) }.take(8)
     }
     val pernah = remember(npk, state.data) {
-        val n = npk.trim()
+        val n = padNpk(npk)
         if (n.isEmpty()) emptyList() else state.data?.responses?.filter { n in it.npks }?.map { fmtTgl(it.tgl) }.orEmpty()
     }
 
@@ -78,6 +78,42 @@ fun FormScreen(state: AppState) {
         tk == "Panen" && kelas.isBlank() -> "Pilih kelas pemanen"
         foto == null -> "Foto dokumentasi wajib"
         else -> null
+    }
+
+    var confirm by remember { mutableStateOf<List<String>?>(null) }
+
+    fun warnings(): List<String> {
+        val w = mutableListOf<String>()
+        val n = padNpk(npk)
+        val bln = tgl.take(7)
+        val dup = state.data?.responses?.filter { n in it.npks && it.tgl.startsWith(bln) }.orEmpty()
+        if (dup.isNotEmpty()) w.add("NPK $n sudah tercatat sarasehan bulan ${monthLabel(bln)} (${dup.joinToString { fmtTgl(it.tgl) }}). Kemungkinan data ganda.")
+        val l = losses.toDoubleOrNull()
+        if (tk == "Panen" && l != null && l > 5.0) w.add("Losses ${fmt2(l)} kg/ha tergolong sangat tinggi. Pastikan tidak salah ketik (mis. 0.975 tertulis 9.75).")
+        return w
+    }
+
+    fun submit() {
+        val o = JSONObject()
+            .put("id", UUID.randomUUID().toString())
+            .put("pengisi", state.repo.pengisi)
+            .put("afdeling", afdLabel(afd))
+            .put("tanggal", tgl)
+            .put("nama", nama.trim())
+            .put("npk", padNpk(npk))
+            .put("tk", tk)
+            .put("kp", kp.trim())
+            .put("kf", kf.trim())
+            .put("saran", saran.trim())
+            .put("losses", if (tk == "Panen") losses.toDouble() else 0.0)
+            .put("kelas", if (tk == "Panen") kelas else "")
+            .put("foto", Img.toBase64(foto!!))
+            .put("fotoName", "LDR_${npk.trim().replace(Regex("[^0-9]+"), "_")}_$tgl.jpg")
+        state.repo.savePending(o)
+        state.pending = state.repo.pendingCount()
+        nama = ""; npk = ""; kp = ""; kf = ""; saran = ""; losses = ""; kelas = ""; foto = null
+        state.message = "Data disimpan, mengirim…"
+        state.sync()
     }
 
     Column(
@@ -180,26 +216,8 @@ fun FormScreen(state: AppState) {
         Button(onClick = {
             error = validate()
             if (error == null) {
-                val o = JSONObject()
-                    .put("id", UUID.randomUUID().toString())
-                    .put("pengisi", state.repo.pengisi)
-                    .put("afdeling", afdLabel(afd))
-                    .put("tanggal", tgl)
-                    .put("nama", nama.trim())
-                    .put("npk", npk.trim())
-                    .put("tk", tk)
-                    .put("kp", kp.trim())
-                    .put("kf", kf.trim())
-                    .put("saran", saran.trim())
-                    .put("losses", if (tk == "Panen") losses.toDouble() else 0.0)
-                    .put("kelas", if (tk == "Panen") kelas else "")
-                    .put("foto", Img.toBase64(foto!!))
-                    .put("fotoName", "LDR_${npk.trim().replace(Regex("[^0-9]+"), "_")}_$tgl.jpg")
-                state.repo.savePending(o)
-                state.pending = state.repo.pendingCount()
-                nama = ""; npk = ""; kp = ""; kf = ""; saran = ""; losses = ""; kelas = ""; foto = null
-                state.message = "Data disimpan, mengirim…"
-                state.sync()
+                val w = warnings()
+                if (w.isEmpty()) submit() else { confirm = w }
             }
         }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
             Icon(Icons.Default.Send, null)
@@ -207,5 +225,14 @@ fun FormScreen(state: AppState) {
             Text("Simpan & Kirim")
         }
         Spacer(Modifier.height(24.dp))
+    }
+    confirm?.let { w ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Periksa lagi") },
+            text = { Text(w.joinToString("\n\n")) },
+            confirmButton = { TextButton(onClick = { confirm = null; submit() }) { Text("Tetap simpan") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Perbaiki") } }
+        )
     }
 }

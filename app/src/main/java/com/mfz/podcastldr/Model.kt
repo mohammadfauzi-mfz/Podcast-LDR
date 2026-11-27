@@ -39,8 +39,15 @@ data class EstateAfd(val estate: String, val afd: String)
 data class Respon(
     val ts: String, val email: String, val afd: String, val tgl: String, val nama: String,
     val npk: String, val npks: List<String>, val tk: String, val kp: String, val kf: String,
-    val saran: String, val foto: String, val lossRaw: String, val loss: Double?, val kelas: String
-)
+    val saran: String, val foto: String, val lossRaw: String, val loss: Double?, val kelas: String,
+    val key: String = "", val tlStatus: String = "", val tlPj: String = "", val tlTarget: String = "",
+    val tlCatatan: String = "", val tlUpdated: String = "", val tlOleh: String = ""
+) {
+    val status: String get() = tlStatus.ifBlank { "Baru" }
+}
+
+val STATUS_LIST = listOf("Baru", "Diproses", "Selesai", "Tidak perlu")
+fun padNpk(s: String): String = s.trim().let { if (it.isNotEmpty() && it.all(Char::isDigit) && it.length < 7) it.padStart(7, '0') else it }
 data class AppData(
     val updated: String, val master: List<Karyawan>, val estates: List<EstateAfd>, val responses: List<Respon>,
     val topics: List<Pair<String, List<Regex>>> = emptyList()
@@ -62,7 +69,9 @@ fun parseData(txt: String): AppData {
             x.s("ts"), x.s("email"), normAfd(x.s("afd")), x.s("tgl"), x.s("nama"), x.s("npk"),
             if (np == null) emptyList() else (0 until np.length()).map { np.getString(it) },
             x.s("tk"), x.s("kp"), x.s("kf"), x.s("saran"), x.s("foto"), x.s("lossRaw"),
-            if (x.isNull("loss")) null else x.optDouble("loss"), x.s("kelas")
+            if (x.isNull("loss")) null else x.optDouble("loss"), x.s("kelas"),
+            key = x.s("key"), tlStatus = x.s("tlStatus"), tlPj = x.s("tlPj"), tlTarget = x.s("tlTarget"),
+            tlCatatan = x.s("tlCatatan"), tlUpdated = x.s("tlUpdated"), tlOleh = x.s("tlOleh")
         )
     }
     val topics = o.optJSONArray("topics").objs().mapNotNull { x ->
@@ -73,7 +82,7 @@ fun parseData(txt: String): AppData {
     return AppData(o.s("updated"), master, estates, responses, topics)
 }
 
-class Repo(ctx: Context) {
+class Repo(private val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("ldr", Context.MODE_PRIVATE)
     private val cacheFile = File(ctx.filesDir, "cache.json")
     private val pendingDir = File(ctx.filesDir, "pending").apply { mkdirs() }
@@ -106,14 +115,27 @@ class Repo(ctx: Context) {
         return Base64.decode(o.getString("data"), Base64.DEFAULT)
     }
 
-    fun savePending(o: JSONObject) = File(pendingDir, o.getString("id") + ".json").writeText(o.toString())
+    fun savePending(o: JSONObject) {
+        File(pendingDir, o.getString("id") + ".json").writeText(o.toString())
+        SyncWorker.enqueue(ctx)
+    }
+
+    /** Simpan tindak lanjut keluhan (perlu sinyal). */
+    fun saveTL(o: JSONObject) {
+        o.put("key", key).put("action", "tl").put("pengisi", pengisi)
+        val txt = http("POST", url, o.toString()).trim()
+        if (txt.startsWith("<")) throw Exception("Respon bukan JSON")
+        val res = JSONObject(txt)
+        if (!res.optBoolean("ok")) throw Exception(res.optString("error", "Gagal"))
+    }
     fun pendingCount() = pendingDir.listFiles()?.size ?: 0
 
     /** Mengirim semua data tertunda; mengembalikan jumlah yang berhasil. */
     fun sendPending(): Int {
         var n = 0
         pendingDir.listFiles()?.sortedBy { it.lastModified() }?.forEach { f ->
-            val o = JSONObject(f.readText()).put("key", key)
+            val raw = runCatching { f.readText() }.getOrNull() ?: return@forEach
+            val o = JSONObject(raw).put("key", key)
             val txt = http("POST", url, o.toString()).trim()
             if (txt.startsWith("<")) throw Exception("Respon bukan JSON, cek akses deploy 'Anyone'")
             val res = JSONObject(txt)

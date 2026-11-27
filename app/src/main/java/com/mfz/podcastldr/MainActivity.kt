@@ -9,6 +9,9 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import java.io.File
+import org.json.JSONObject
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -48,6 +51,23 @@ class AppState(val repo: Repo, private val scope: CoroutineScope) {
     var updateStatus by mutableStateOf("")
     var dlProgress by mutableStateOf<Float?>(null)
     var shareBusy by mutableStateOf<String?>(null)
+    var tlSaving by mutableStateOf(false)
+
+    fun saveTL(o: JSONObject, done: () -> Unit) {
+        if (tlSaving) return
+        scope.launch {
+            tlSaving = true
+            try {
+                withContext(Dispatchers.IO) { repo.saveTL(o) }
+                message = "Tindak lanjut tersimpan"
+                done()
+                load()
+            } catch (e: Exception) {
+                message = "Gagal menyimpan tindak lanjut: ${e.message}"
+            }
+            tlSaving = false
+        }
+    }
 
     /** Bagikan teks + foto (diunduh lewat Apps Script). withFoto=false untuk teks saja. */
     fun share(ctx: Context, text: String, list: List<Respon>, withFoto: Boolean = true) {
@@ -170,7 +190,12 @@ fun App(state: AppState) {
     var tab by rememberSaveable { mutableIntStateOf(1) }
     var showSettings by remember { mutableStateOf(state.repo.url.isBlank() || state.repo.pengisi.isBlank()) }
     val snack = remember { SnackbarHostState() }
-    LaunchedEffect(Unit) { state.sync(); state.checkUpdate(silent = true) }
+    val appCtx = LocalContext.current.applicationContext
+    LaunchedEffect(Unit) {
+        if (state.repo.pendingCount() > 0) SyncWorker.enqueue(appCtx)
+        state.sync(); state.checkUpdate(silent = true)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { state.pending = state.repo.pendingCount() }
     LaunchedEffect(state.message) {
         state.message?.let { snack.showSnackbar(it); state.message = null }
     }
@@ -271,6 +296,13 @@ fun SettingsDialog(state: AppState, onDismiss: () -> Unit) {
 fun pctColor(p: Float) = when {
     p >= 0.8f -> Color(0xFF2E7D32)
     p >= 0.5f -> Color(0xFFF9A825)
+    else -> Color(0xFFC62828)
+}
+
+fun statusColor(s: String) = when (s) {
+    "Selesai" -> Color(0xFF2E7D32)
+    "Diproses" -> Color(0xFF1565C0)
+    "Tidak perlu" -> Color(0xFF757575)
     else -> Color(0xFFC62828)
 }
 

@@ -139,6 +139,27 @@ fun RekapScreen(state: AppState) {
             }
         }
         item {
+            SectionCard("Tindak Lanjut Keluhan") {
+                val perlu = resp.filter { it.status != "Tidak perlu" }
+                val sel = perlu.count { it.status == "Selesai" }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    STATUS_LIST.forEach { s ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${resp.count { it.status == s }}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = statusColor(s))
+                            Text(s, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                BarRow("Selesai (semua)", sel, perlu.size, "$sel/${perlu.size}  (${pct(sel, perlu.size)})", statusColor("Selesai"))
+                perlu.groupBy { it.afd }.toList().sortedWith(compareBy(afdComparator) { it.first }).forEach { (a, l) ->
+                    val n = l.count { it.status == "Selesai" }
+                    BarRow(afdLabel(a), n, l.size, "$n/${l.size}", statusColor("Selesai"))
+                }
+                Text("Ubah status di tab Data → ketuk data → Tindak Lanjut.", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        item {
             SectionCard("Kelas Pemanen") {
                 val ks = listOf("A", "B", "C", "D")
                 val tot = panen.count { it.kelas in ks }
