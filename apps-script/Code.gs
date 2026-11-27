@@ -1,0 +1,161 @@
+/**
+ * Podcast LDR – API untuk aplikasi Android
+ * Pasang di spreadsheet hasil form: Extensions > Apps Script, tempel seluruh isi file ini.
+ * Lalu jalankan fungsi setup() sekali (izinkan akses), kemudian Deploy > New deployment > Web app
+ *   Execute as: Me   |   Who has access: Anyone
+ */
+const API_KEY = 'ldr-2026';                      // samakan dengan "Kunci API" di aplikasi
+const SHEET_RESP = 'Form Responses 1';
+const SHEET_DB = 'DB_TKPanen';
+const SHEET_REKAP = 'Rekap';
+const FOLDER_ID = '';                            // opsional: ID folder Drive untuk foto. Kosong = dibuat otomatis
+const FOLDER_NAME = 'Podcast LDR - Foto Aplikasi';
+
+function setup() {
+  const ss = SpreadsheetApp.getActive();
+  Logger.log('Folder foto: ' + folder_().getUrl());
+  Logger.log('Master TK: ' + readMaster_(ss).length + ' | Respon: ' + readResponses_(ss).length);
+}
+
+function doGet(e) {
+  try {
+    if (((e && e.parameter && e.parameter.key) || '') !== API_KEY) return json_({ ok: false, error: 'Kunci API salah' });
+    const ss = SpreadsheetApp.getActive();
+    return json_({
+      ok: true,
+      updated: Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'dd/MM/yyyy HH:mm'),
+      master: readMaster_(ss),
+      estates: readEstates_(ss),
+      responses: readResponses_(ss)
+    });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
+}
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    const d = JSON.parse(e.postData.contents);
+    if (d.key !== API_KEY) return json_({ ok: false, error: 'Kunci API salah' });
+    lock.waitLock(30000);
+    const props = PropertiesService.getScriptProperties();
+    if (d.id && props.getProperty('sent_' + d.id)) return json_({ ok: true, dup: true });
+
+    const ss = SpreadsheetApp.getActive();
+    const tz = ss.getSpreadsheetTimeZone();
+    const sh = ss.getSheetByName(SHEET_RESP);
+    if (!sh) return json_({ ok: false, error: 'Sheet ' + SHEET_RESP + ' tidak ditemukan' });
+
+    let foto = '';
+    if (d.foto) {
+      const blob = Utilities.newBlob(Utilities.base64Decode(d.foto), 'image/jpeg', d.fotoName || ('LDR_' + d.npk + '.jpg'));
+      const file = folder_().createFile(blob);
+      try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (x) { /* kebijakan domain */ }
+      foto = 'https://drive.google.com/open?id=' + file.getId();
+    }
+    const panen = d.tk === 'Panen';
+    const row = [
+      new Date(),
+      d.pengisi || 'Aplikasi',
+      '',
+      d.afdeling || '',
+      d.tanggal ? Utilities.parseDate(d.tanggal, tz, 'yyyy-MM-dd') : '',
+      d.nama || '',
+      String(d.npk || ''),
+      d.tk || '',
+      d.kp || '',
+      d.kf || '',
+      d.saran || '',
+      foto,
+      panen ? Number(d.losses) || 0 : 0,
+      panen && d.kelas ? 'Kelas ' + d.kelas : ''
+    ];
+    const r = sh.getLastRow() + 1;
+    sh.getRange(r, 7).setNumberFormat('@');           // NPK tetap teks (nol di depan tidak hilang)
+    sh.getRange(r, 1, 1, row.length).setValues([row]);
+    if (d.id) props.setProperty('sent_' + d.id, '1');
+    return json_({ ok: true, foto: foto });
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ---------- pembaca data ---------- */
+
+function readMaster_(ss) {
+  const sh = ss.getSheetByName(SHEET_DB);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const v = sh.getRange(2, 1, sh.getLastRow() - 1, 6).getValues();
+  return v.filter(r => r[1] !== '' && r[1] !== null).map(r => ({
+    npk: pad_(r[1]), nama: String(r[2]).trim(), afd: normAfd_(r[3]), estate: String(r[4]).trim()
+  }));
+}
+
+function readEstates_(ss) {
+  const sh = ss.getSheetByName(SHEET_REKAP);
+  if (!sh || sh.getLastRow() < 4) return [];
+  const v = sh.getRange(4, 2, sh.getLastRow() - 3, 2).getValues();
+  const out = []; let est = '';
+  for (const r of v) {
+    if (String(r[0]).trim()) est = String(r[0]).trim();
+    const afd = normAfd_(r[1]);
+    if (!afd) break;
+    out.push({ estate: est, afd: afd });
+  }
+  return out;
+}
+
+function readResponses_(ss) {
+  const sh = ss.getSheetByName(SHEET_RESP);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const tz = ss.getSpreadsheetTimeZone();
+  const v = sh.getRange(2, 1, sh.getLastRow() - 1, 14).getValues();
+  return v.filter(r => r[0] !== '' && r[5] !== '').map(r => ({
+    ts: fmt_(r[0], tz, 'yyyy-MM-dd HH:mm'),
+    email: String(r[1]),
+    afd: normAfd_(r[3]),
+    tgl: fmt_(r[4], tz, 'yyyy-MM-dd'),
+    nama: String(r[5]).trim(),
+    npk: String(r[6]).trim(),
+    npks: String(r[6]).split(/[,;\/&]+/).map(pad_).filter(x => x),
+    tk: String(r[7]).trim(),
+    kp: String(r[8]).trim(),
+    kf: String(r[9]).trim(),
+    saran: String(r[10]).trim(),
+    foto: String(r[11]).trim(),
+    lossRaw: String(r[12]),
+    loss: parseLoss_(r[12]),
+    kelas: String(r[13]).replace(/kelas/i, '').trim().toUpperCase()
+  }));
+}
+
+/* ---------- utilitas ---------- */
+
+function pad_(x) {
+  let s = (typeof x === 'number') ? String(Math.round(x)) : String(x || '').trim();
+  if (/^\d+$/.test(s) && s.length < 7) s = s.padStart(7, '0');
+  return s;
+}
+function normAfd_(x) {
+  const s = String(x || '').trim().replace(/^afdeling\s*/i, '').replace(/^afd\.?\s*/i, '').trim();
+  return s ? 'Afd ' + s : '';
+}
+function parseLoss_(x) {
+  if (typeof x === 'number') return x;
+  const m = String(x || '').replace(/,/g, '.').match(/\d+(\.\d+)?/);
+  return m ? parseFloat(m[0]) : null;
+}
+function fmt_(d, tz, p) {
+  return (d instanceof Date) ? Utilities.formatDate(d, tz, p) : String(d || '');
+}
+function folder_() {
+  if (FOLDER_ID) return DriveApp.getFolderById(FOLDER_ID);
+  const it = DriveApp.getFoldersByName(FOLDER_NAME);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER_NAME);
+}
+function json_(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
