@@ -154,7 +154,7 @@ function pad_(x) {
   return s;
 }
 function normAfd_(x) {
-  const s = String(x || '').trim().replace(/^afdeling\s*/i, '').replace(/^afd\.?\s*/i, '').trim();
+  const s = String(x || '').trim().replace(/^afdeling\s*/i, '').replace(/^afd\.?\s*/i, '').replace(/,/g, '.').trim();
   return s ? 'Afd ' + s : '';
 }
 function parseLoss_(x) {

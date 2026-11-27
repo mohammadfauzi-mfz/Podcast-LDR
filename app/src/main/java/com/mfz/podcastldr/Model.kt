@@ -30,6 +30,8 @@ object Config {
 
 val AFD_LIST = (1..14).map { "Afd $it" } + listOf("Afd KT1.1", "Afd KT1.2", "Afd KT1.3")
 val afdComparator: Comparator<String> = compareBy { a -> AFD_LIST.indexOf(a).let { if (it < 0) 99 else it } }
+/** Menyamakan penulisan afdeling, mis. "Afd KT1,1" -> "Afd KT1.1". */
+fun normAfd(a: String) = a.trim().replace(',', '.').replace(Regex("\\s+"), " ")
 fun afdLabel(a: String) = "Afdeling " + a.removePrefix("Afd ")
 
 data class Karyawan(val npk: String, val nama: String, val afd: String, val estate: String)
@@ -49,12 +51,12 @@ fun parseData(txt: String): AppData {
     if (t.startsWith("<")) throw Exception("Respon bukan JSON. Pastikan Web App di-deploy dengan akses 'Anyone' dan URL berakhiran /exec")
     val o = JSONObject(t)
     if (!o.optBoolean("ok")) throw Exception(o.optString("error", "Gagal"))
-    val master = o.optJSONArray("master").objs().map { Karyawan(it.s("npk"), it.s("nama"), it.s("afd"), it.s("estate")) }
-    val estates = o.optJSONArray("estates").objs().map { EstateAfd(it.s("estate"), it.s("afd")) }
+    val master = o.optJSONArray("master").objs().map { Karyawan(it.s("npk"), it.s("nama"), normAfd(it.s("afd")), it.s("estate")) }
+    val estates = o.optJSONArray("estates").objs().map { EstateAfd(it.s("estate"), normAfd(it.s("afd"))) }
     val responses = o.optJSONArray("responses").objs().map { x ->
         val np = x.optJSONArray("npks")
         Respon(
-            x.s("ts"), x.s("email"), x.s("afd"), x.s("tgl"), x.s("nama"), x.s("npk"),
+            x.s("ts"), x.s("email"), normAfd(x.s("afd")), x.s("tgl"), x.s("nama"), x.s("npk"),
             if (np == null) emptyList() else (0 until np.length()).map { np.getString(it) },
             x.s("tk"), x.s("kp"), x.s("kf"), x.s("saran"), x.s("foto"), x.s("lossRaw"),
             if (x.isNull("loss")) null else x.optDouble("loss"), x.s("kelas")
