@@ -27,4 +27,5 @@ jobs:
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Podcast LDR v1.0.${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
           files: Podcast-LDR.apk

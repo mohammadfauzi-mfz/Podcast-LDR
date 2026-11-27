@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import java.io.File
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -40,6 +44,55 @@ class AppState(val repo: Repo, private val scope: CoroutineScope) {
     var loading by mutableStateOf(false)
     var pending by mutableIntStateOf(repo.pendingCount())
     var message by mutableStateOf<String?>(null)
+    var update by mutableStateOf<UpdateInfo?>(null)
+    var updateStatus by mutableStateOf("")
+    var dlProgress by mutableStateOf<Float?>(null)
+
+    fun checkUpdate(silent: Boolean) {
+        scope.launch {
+            if (!silent) updateStatus = "Mengecek…"
+            try {
+                val u = withContext(Dispatchers.IO) { Updater.check() }
+                if (u.code > BuildConfig.VERSION_CODE && u.apkUrl.isNotBlank()) {
+                    update = u
+                    updateStatus = "Versi baru tersedia: ${u.tag}"
+                    if (silent) message = "Update ${u.tag} tersedia. Buka Pengaturan untuk memperbarui."
+                } else {
+                    update = null
+                    updateStatus = "Aplikasi sudah versi terbaru"
+                }
+            } catch (e: Exception) {
+                if (!silent) updateStatus = "Gagal cek update: ${e.message}"
+            }
+        }
+    }
+
+    fun installUpdate(ctx: Context) {
+        val u = update ?: return
+        if (dlProgress != null) return
+        if (!ctx.packageManager.canRequestPackageInstalls()) {
+            updateStatus = "Izinkan \"Instal aplikasi tak dikenal\" untuk Podcast LDR, lalu tekan Update lagi"
+            ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)))
+            return
+        }
+        scope.launch {
+            dlProgress = 0f
+            updateStatus = "Mengunduh ${u.tag}…"
+            try {
+                val f = File(ctx.cacheDir, "update.apk")
+                withContext(Dispatchers.IO) { Updater.download(u.apkUrl, f) { p -> dlProgress = p } }
+                updateStatus = "Unduhan selesai, membuka pemasang…"
+                val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fp", f)
+                ctx.startActivity(
+                    Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                updateStatus = "Gagal mengunduh: ${e.message}"
+            }
+            dlProgress = null
+        }
+    }
 
     private suspend fun load() {
         if (repo.url.isBlank()) { message = "Isi URL Web App di Pengaturan"; return }
@@ -96,7 +149,7 @@ fun App(state: AppState) {
     var tab by rememberSaveable { mutableIntStateOf(1) }
     var showSettings by remember { mutableStateOf(state.repo.url.isBlank() || state.repo.pengisi.isBlank()) }
     val snack = remember { SnackbarHostState() }
-    LaunchedEffect(Unit) { state.sync() }
+    LaunchedEffect(Unit) { state.sync(); state.checkUpdate(silent = true) }
     LaunchedEffect(state.message) {
         state.message?.let { snack.showSnackbar(it); state.message = null }
     }
@@ -155,6 +208,19 @@ fun SettingsDialog(state: AppState, onDismiss: () -> Unit) {
                 OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("URL Web App (berakhiran /exec)") })
                 OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text("Kunci API") }, singleLine = true)
                 Text("URL & kunci didapat dari admin (Apps Script spreadsheet).", style = MaterialTheme.typography.labelSmall)
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Versi terpasang: ${BuildConfig.VERSION_NAME}", fontWeight = FontWeight.SemiBold)
+                if (state.updateStatus.isNotBlank()) Text(state.updateStatus, style = MaterialTheme.typography.bodySmall)
+                state.update?.notes?.takeIf { it.isNotBlank() }?.let { Text("Catatan: $it", style = MaterialTheme.typography.labelSmall) }
+                state.dlProgress?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
+                val ctx = LocalContext.current
+                if (state.update != null) {
+                    Button(onClick = { state.installUpdate(ctx) }, enabled = state.dlProgress == null, modifier = Modifier.fillMaxWidth()) {
+                        Text("Update ke ${state.update?.tag}")
+                    }
+                } else {
+                    OutlinedButton(onClick = { state.checkUpdate(silent = false) }, modifier = Modifier.fillMaxWidth()) { Text("Cek Update") }
+                }
             }
         },
         confirmButton = {

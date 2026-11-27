@@ -221,3 +221,54 @@ fun Respon.matches(rx: List<Regex>): Boolean {
     val t = "$kp $kf $saran".lowercase()
     return rx.any { it.containsMatchIn(t) }
 }
+
+data class UpdateInfo(val code: Int, val tag: String, val apkUrl: String, val notes: String)
+
+object Updater {
+    private const val API = "https://api.github.com/repos/mohammadfauzi-mfz/podcast-ldr/releases/latest"
+
+    fun check(): UpdateInfo {
+        val c = URL(API).openConnection() as HttpURLConnection
+        c.connectTimeout = 15000; c.readTimeout = 30000
+        c.setRequestProperty("Accept", "application/vnd.github+json")
+        val code = c.responseCode
+        if (code == 404) throw Exception("Rilis tidak ditemukan (repo harus public)")
+        if (code !in 200..299) throw Exception("HTTP $code")
+        val o = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        val tag = o.optString("tag_name")
+        val assets = o.optJSONArray("assets")
+        var apk = ""
+        if (assets != null) for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            if (a.optString("name").endsWith(".apk")) { apk = a.optString("browser_download_url"); break }
+        }
+        return UpdateInfo(tag.substringAfterLast('.').toIntOrNull() ?: 0, tag, apk, o.optString("body"))
+    }
+
+    fun download(url: String, dest: File, progress: (Float) -> Unit) {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = true
+        c.connectTimeout = 20000; c.readTimeout = 60000
+        var conn = c
+        var hops = 0
+        while (conn.responseCode in 300..399 && hops++ < 5) {
+            val loc = conn.getHeaderField("Location") ?: break
+            conn.disconnect()
+            conn = (URL(loc).openConnection() as HttpURLConnection).apply { connectTimeout = 20000; readTimeout = 60000 }
+        }
+        if (conn.responseCode !in 200..299) throw Exception("HTTP ${conn.responseCode}")
+        val total = conn.contentLengthLong
+        conn.inputStream.use { inp ->
+            dest.outputStream().use { out ->
+                val buf = ByteArray(32 * 1024)
+                var done = 0L
+                while (true) {
+                    val n = inp.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n); done += n
+                    if (total > 0) progress(done.toFloat() / total)
+                }
+            }
+        }
+    }
+}

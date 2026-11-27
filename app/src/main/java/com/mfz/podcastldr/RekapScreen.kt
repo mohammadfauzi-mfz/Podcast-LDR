@@ -37,16 +37,41 @@ fun RekapScreen(state: AppState) {
     var afdDetail by remember { mutableStateOf<String?>(null) }
     var topikDetail by remember { mutableStateOf<Pair<String, List<Respon>>?>(null) }
 
-    val months = remember(d) { d.responses.map { it.tgl.take(7) }.filter { it.length == 7 && it[4] == '-' }.distinct().sortedDescending() }
-    val resp = remember(d, bulan) { if (bulan.isEmpty()) d.responses else d.responses.filter { it.tgl.startsWith(bulan) } }
-    val done = remember(resp) { HashMap<String, Respon>().also { m -> resp.forEach { r -> r.npks.forEach { m[it] = r } } } }
+    var estF by rememberSaveable { mutableStateOf("") }
+    var afdF by rememberSaveable { mutableStateOf("") }
+    var estMenu by remember { mutableStateOf(false) }
+    var afdMenu by remember { mutableStateOf(false) }
+
     val groups = remember(d) { estateGroups(d) }
+    val scopeAfds: Set<String>? = remember(groups, estF, afdF) {
+        when {
+            afdF.isNotEmpty() -> setOf(afdF)
+            estF.isNotEmpty() -> groups.firstOrNull { it.first == estF }?.second?.toSet() ?: emptySet()
+            else -> null
+        }
+    }
+    val master = remember(d, scopeAfds) { if (scopeAfds == null) d.master else d.master.filter { it.afd in scopeAfds } }
+    val shownGroups = remember(groups, estF, afdF) {
+        groups.filter { estF.isEmpty() || it.first == estF }
+            .map { (e, a) -> e to a.filter { afdF.isEmpty() || it == afdF } }
+            .filter { it.second.isNotEmpty() }
+    }
+    val months = remember(d) { d.responses.map { it.tgl.take(7) }.filter { it.length == 7 && it[4] == '-' }.distinct().sortedDescending() }
+    val resp = remember(d, bulan, scopeAfds) {
+        d.responses.filter { (bulan.isEmpty() || it.tgl.startsWith(bulan)) && (scopeAfds == null || it.afd in scopeAfds) }
+    }
+    val done = remember(resp) { HashMap<String, Respon>().also { m -> resp.forEach { r -> r.npks.forEach { m[it] = r } } } }
+    val scopeLabel = when {
+        afdF.isNotEmpty() -> afdLabel(afdF)
+        estF.isNotEmpty() -> "Estate $estF"
+        else -> "Semua Estate"
+    }
     val panen = remember(resp) { resp.filter { it.tk.equals("Panen", true) } }
     val topik = remember(resp) {
         TOPIK.map { (n, rx) -> n to resp.filter { it.matches(rx) } }.filter { it.second.isNotEmpty() }.sortedByDescending { it.second.size }
     }
-    val totalTk = d.master.size
-    val totalDone = d.master.count { done.containsKey(it.npk) }
+    val totalTk = master.size
+    val totalDone = master.count { done.containsKey(it.npk) }
 
     LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
         item {
@@ -56,7 +81,33 @@ fun RekapScreen(state: AppState) {
             }
         }
         item {
-            SectionCard("Cakupan Podcast LDR – TK Panen") {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { estMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (estF.isEmpty()) "Estate: Semua" else "Estate: $estF", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = estMenu, onDismissRequest = { estMenu = false }) {
+                        DropdownMenuItem(text = { Text("Semua Estate") }, onClick = { estF = ""; afdF = ""; estMenu = false })
+                        groups.forEach { (e, _) -> DropdownMenuItem(text = { Text("Estate $e") }, onClick = { estF = e; afdF = ""; estMenu = false }) }
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { afdMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (afdF.isEmpty()) "Afd: Semua" else "Afd: ${afdF.removePrefix("Afd ")}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = afdMenu, onDismissRequest = { afdMenu = false }) {
+                        DropdownMenuItem(text = { Text("Semua Afdeling") }, onClick = { afdF = ""; afdMenu = false })
+                        groups.filter { estF.isEmpty() || it.first == estF }.forEach { (e, afds) ->
+                            afds.forEach { a ->
+                                DropdownMenuItem(text = { Text(afdLabel(a)) }, onClick = { afdF = a; estF = e; afdMenu = false })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            SectionCard("Cakupan Podcast LDR – $scopeLabel") {
                 val p = if (totalTk > 0) totalDone.toFloat() / totalTk else 0f
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(pct(totalDone, totalTk), fontSize = 40.sp, fontWeight = FontWeight.Bold, color = pctColor(p))
@@ -74,12 +125,12 @@ fun RekapScreen(state: AppState) {
                 Text("Ketuk afdeling untuk melihat TK yang belum/sudah ikut.", style = MaterialTheme.typography.labelSmall)
             }
         }
-        items(groups) { (est, afds) ->
-            val tkE = d.master.filter { it.afd in afds }
+        items(shownGroups) { (est, afds) ->
+            val tkE = master.filter { it.afd in afds }
             val dnE = tkE.count { done.containsKey(it.npk) }
             SectionCard("Estate $est   ${dnE}/${tkE.size} (${pct(dnE, tkE.size)})") {
                 afds.forEach { a ->
-                    val t = d.master.filter { it.afd == a }
+                    val t = master.filter { it.afd == a }
                     val n = t.count { done.containsKey(it.npk) }
                     val p = if (t.isNotEmpty()) n.toFloat() / t.size else 0f
                     BarRow(afdLabel(a), n, t.size, "$n/${t.size}  (${pct(n, t.size)})", pctColor(p)) { afdDetail = a }
