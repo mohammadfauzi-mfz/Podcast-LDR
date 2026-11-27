@@ -47,6 +47,27 @@ class AppState(val repo: Repo, private val scope: CoroutineScope) {
     var update by mutableStateOf<UpdateInfo?>(null)
     var updateStatus by mutableStateOf("")
     var dlProgress by mutableStateOf<Float?>(null)
+    var shareBusy by mutableStateOf<String?>(null)
+
+    /** Bagikan teks + foto (diunduh lewat Apps Script). withFoto=false untuk teks saja. */
+    fun share(ctx: Context, text: String, list: List<Respon>, withFoto: Boolean = true) {
+        if (shareBusy != null) return
+        scope.launch {
+            val uris = mutableListOf<Uri>()
+            val targets = if (withFoto) list.filter { it.foto.isNotBlank() }.take(MAX_FOTO_SHARE) else emptyList()
+            if (targets.isNotEmpty()) {
+                shareBusy = "Menyiapkan foto…"
+                withContext(Dispatchers.IO) { Sharer.clear(ctx) }
+                targets.forEachIndexed { i, r ->
+                    shareBusy = "Menyiapkan foto ${i + 1}/${targets.size}…"
+                    withContext(Dispatchers.IO) { Sharer.prepare(ctx, repo, r, i) }?.let { uris.add(it) }
+                }
+                shareBusy = null
+                if (uris.size < targets.size) message = "${targets.size - uris.size} foto gagal diambil (dibagikan tanpa foto tersebut)"
+            }
+            Sharer.send(ctx, text, uris)
+        }
+    }
 
     fun checkUpdate(silent: Boolean) {
         scope.launch {
@@ -192,6 +213,15 @@ fun App(state: AppState) {
         }
     }
     if (showSettings) SettingsDialog(state) { showSettings = false }
+    state.shareBusy?.let { msg ->
+        AlertDialog(onDismissRequest = {}, confirmButton = {}, title = { Text("Membagikan") }, text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(msg)
+            }
+        })
+    }
 }
 
 @Composable
@@ -221,6 +251,9 @@ fun SettingsDialog(state: AppState, onDismiss: () -> Unit) {
                 } else {
                     OutlinedButton(onClick = { state.checkUpdate(silent = false) }, modifier = Modifier.fillMaxWidth()) { Text("Cek Update") }
                 }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Text("Dibuat oleh Mohammad Fauzi", fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { openUrl(ctx, "https://wa.me/6285252390543") }) { Text("Hubungi via WhatsApp") }
             }
         },
         confirmButton = {

@@ -8,11 +8,28 @@ const API_KEY = 'ldr-2026';                      // samakan dengan "Kunci API" d
 const SHEET_RESP = 'Form Responses 1';
 const SHEET_DB = 'DB_TKPanen';
 const SHEET_REKAP = 'Rekap';
+const SHEET_TOPIK = 'Topik';
+const DEFAULT_TOPIK = [
+  ['Air bersih / air minum', 'air!, drum, gentong, kentong, ember, sumur, mck!'],
+  ['Akses panen (titi, jalan, teras)', 'titi, tangga, jalan, ereng, akses, pasar pikul, jb!, teras, langsir, pelangsir'],
+  ['Pruning / pelepah', 'prun, pronin, pelepah, pelelah, sengkleh'],
+  ['Perumahan', 'rumah, perumahan, plafon, platfon, platpom, plywood, pliut, triplek, barak, dinding, pintu, seng!, wc!, kamar'],
+  ['APD & alat kerja', 'helm, sepatu, boot, egrek, apd!, pipa, angkong, arco, korset, masker'],
+  ['Gaji / upah / premi', 'gaji, upah, brondol, premi, slip, bjr!, basis, basic'],
+  ['Ancak semak / piringan', 'semak, kentosan, piringan, gawangan, tebas, rgm!, cemis'],
+  ['Pokok tinggi', 'pokok tinggi, terlalu tinggi, sudah tinggi, tinggi-tinggi, pipa luar, pipa panjang'],
+  ['Grading / restan', 'grading, restan, kurang buah'],
+  ['Transportasi', 'motor, kendaraan, antar jemput, transport, bus!'],
+  ['Sarana olahraga', 'olahraga, lapangan, takraw, badminton'],
+  ['Ternak / sapi', 'sapi, ternak'],
+  ['Pekerjaan istri / keluarga', 'istri, anak saya']
+];
 const FOLDER_ID = '';                            // opsional: ID folder Drive untuk foto. Kosong = dibuat otomatis
 const FOLDER_NAME = 'Podcast LDR - Foto Aplikasi';
 
 function setup() {
   const ss = SpreadsheetApp.getActive();
+  ensureTopik_(ss);
   Logger.log('Folder foto: ' + folder_().getUrl());
   Logger.log('Master TK: ' + readMaster_(ss).length + ' | Respon: ' + readResponses_(ss).length);
 }
@@ -20,13 +37,15 @@ function setup() {
 function doGet(e) {
   try {
     if (((e && e.parameter && e.parameter.key) || '') !== API_KEY) return json_({ ok: false, error: 'Kunci API salah' });
+    if (e.parameter.action === 'foto') return foto_(e.parameter.id);
     const ss = SpreadsheetApp.getActive();
     return json_({
       ok: true,
       updated: Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'dd/MM/yyyy HH:mm'),
       master: readMaster_(ss),
       estates: readEstates_(ss),
-      responses: readResponses_(ss)
+      responses: readResponses_(ss),
+      topics: readTopik_(ss)
     });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -95,6 +114,46 @@ function fixNpk() {
   });
   rg.setValues(out);
   Logger.log(n + ' NPK diperbaiki');
+}
+
+/* ---------- topik & foto ---------- */
+
+function ensureTopik_(ss) {
+  let sh = ss.getSheetByName(SHEET_TOPIK);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_TOPIK);
+    sh.getRange(1, 1, 1, 2).setValues([['Topik', 'Kata kunci (pisahkan dengan koma; akhiri ! untuk kata utuh)']]).setFontWeight('bold');
+    sh.getRange(2, 1, DEFAULT_TOPIK.length, 2).setValues(DEFAULT_TOPIK);
+    sh.setColumnWidth(1, 240); sh.setColumnWidth(2, 640);
+  }
+  return sh;
+}
+
+function readTopik_(ss) {
+  const sh = ss.getSheetByName(SHEET_TOPIK);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+    .filter(r => String(r[0]).trim() && String(r[1]).trim())
+    .map(r => ({
+      name: String(r[0]).trim(),
+      kws: String(r[1]).split(/[,;\n]+/).map(s => s.trim().toLowerCase()).filter(s => s)
+    }));
+}
+
+/** Mengambil foto Drive (dari Form maupun aplikasi) sebagai base64, diperkecil bila bisa. */
+function foto_(id) {
+  if (!/^[\w-]{10,}$/.test(id || '')) return json_({ ok: false, error: 'ID foto tidak valid' });
+  let blob = null;
+  try {
+    const r = UrlFetchApp.fetch('https://drive.google.com/thumbnail?id=' + id + '&sz=w1600', {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true
+    });
+    const h = r.getHeaders();
+    const ct = String(h['Content-Type'] || h['content-type'] || '');
+    if (r.getResponseCode() === 200 && ct.indexOf('image') === 0) blob = r.getBlob();
+  } catch (x) { /* pakai file asli */ }
+  if (!blob) blob = DriveApp.getFileById(id).getBlob();
+  return json_({ ok: true, mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) });
 }
 
 /* ---------- pembaca data ---------- */

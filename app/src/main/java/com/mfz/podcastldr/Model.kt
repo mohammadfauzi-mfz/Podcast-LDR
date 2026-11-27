@@ -41,7 +41,10 @@ data class Respon(
     val npk: String, val npks: List<String>, val tk: String, val kp: String, val kf: String,
     val saran: String, val foto: String, val lossRaw: String, val loss: Double?, val kelas: String
 )
-data class AppData(val updated: String, val master: List<Karyawan>, val estates: List<EstateAfd>, val responses: List<Respon>)
+data class AppData(
+    val updated: String, val master: List<Karyawan>, val estates: List<EstateAfd>, val responses: List<Respon>,
+    val topics: List<Pair<String, List<Regex>>> = emptyList()
+)
 
 private fun JSONObject.s(k: String) = if (isNull(k)) "" else optString(k, "")
 private fun JSONArray?.objs(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
@@ -62,7 +65,12 @@ fun parseData(txt: String): AppData {
             if (x.isNull("loss")) null else x.optDouble("loss"), x.s("kelas")
         )
     }
-    return AppData(o.s("updated"), master, estates, responses)
+    val topics = o.optJSONArray("topics").objs().mapNotNull { x ->
+        val a = x.optJSONArray("kws") ?: return@mapNotNull null
+        val ks = (0 until a.length()).map { a.getString(it) }.filter { it.isNotBlank() }
+        if (ks.isEmpty()) null else x.s("name") to kwList(ks)
+    }
+    return AppData(o.s("updated"), master, estates, responses, topics)
 }
 
 class Repo(ctx: Context) {
@@ -87,6 +95,15 @@ class Repo(ctx: Context) {
         val d = parseData(txt)
         cacheFile.writeText(txt)
         return d
+    }
+
+    /** Mengunduh foto Drive lewat Apps Script (bisa membaca foto dari Form yang privat). */
+    fun foto(id: String): ByteArray {
+        val txt = http("GET", "$url?key=" + URLEncoder.encode(key, "UTF-8") + "&action=foto&id=" + URLEncoder.encode(id, "UTF-8"), null).trim()
+        if (txt.startsWith("<")) throw Exception("Respon bukan JSON")
+        val o = JSONObject(txt)
+        if (!o.optBoolean("ok")) throw Exception(o.optString("error", "Gagal"))
+        return Base64.decode(o.getString("data"), Base64.DEFAULT)
     }
 
     fun savePending(o: JSONObject) = File(pendingDir, o.getString("id") + ".json").writeText(o.toString())
@@ -192,6 +209,9 @@ object Img {
     }
 }
 
+fun driveId(link: String): String? =
+    Regex("[?&]id=([\\w-]{10,})").find(link)?.groupValues?.get(1) ?: Regex("/d/([\\w-]{10,})").find(link)?.groupValues?.get(1)
+
 fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 fun fmtTgl(t: String): String = if (t.length >= 10 && t[4] == '-') "${t.substring(8, 10)}/${t.substring(5, 7)}/${t.substring(0, 4)}" else t
 fun fmt2(d: Double): String = String.format(Locale.US, "%.2f", d)
@@ -200,9 +220,10 @@ fun monthLabel(m: String): String = runCatching {
     listOf("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")[m.substring(5, 7).toInt() - 1] + " " + m.take(4)
 }.getOrDefault(m)
 
-private fun kw(vararg k: String) = k.map { w ->
-    if (w.endsWith("!")) Regex("\\b" + Regex.escape(w.dropLast(1)) + "\\b") else Regex("\\b" + Regex.escape(w))
+fun kwList(k: List<String>): List<Regex> = k.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.map { w ->
+    if (w.endsWith("!")) Regex("\\b" + Regex.escape(w.dropLast(1).trim()) + "\\b") else Regex("\\b" + Regex.escape(w))
 }
+private fun kw(vararg k: String) = kwList(k.toList())
 
 /** Pengelompokan topik keluhan/saran berdasarkan kata kunci ("!" = kata utuh). */
 val TOPIK: List<Pair<String, List<Regex>>> = listOf(

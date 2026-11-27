@@ -67,8 +67,8 @@ fun RekapScreen(state: AppState) {
         else -> "Semua Estate"
     }
     val panen = remember(resp) { resp.filter { it.tk.equals("Panen", true) } }
-    val topik = remember(resp) {
-        TOPIK.map { (n, rx) -> n to resp.filter { it.matches(rx) } }.filter { it.second.isNotEmpty() }.sortedByDescending { it.second.size }
+    val topik = remember(resp, d) {
+        d.topics.ifEmpty { TOPIK }.map { (n, rx) -> n to resp.filter { it.matches(rx) } }.filter { it.second.isNotEmpty() }.sortedByDescending { it.second.size }
     }
     val totalTk = master.size
     val totalDone = master.count { done.containsKey(it.npk) }
