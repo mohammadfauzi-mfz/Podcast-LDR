@@ -75,6 +75,7 @@ fun RekapScreen(state: AppState) {
 
     LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
         item {
+            Text("Bulan pelaksanaan sarasehan:", Modifier.padding(horizontal = 14.dp), style = MaterialTheme.typography.labelMedium)
             LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 item { FilterChip(selected = bulan.isEmpty(), onClick = { bulan = "" }, label = { Text("Semua") }) }
                 items(months) { m -> FilterChip(selected = bulan == m, onClick = { bulan = m }, label = { Text(monthLabel(m)) }) }

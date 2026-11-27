@@ -62,7 +62,7 @@ function doPost(e) {
       d.afdeling || '',
       d.tanggal ? Utilities.parseDate(d.tanggal, tz, 'yyyy-MM-dd') : '',
       d.nama || '',
-      String(d.npk || ''),
+      "'" + String(d.npk || ''),                // apostrof = paksa teks, nol di depan tetap ada
       d.tk || '',
       d.kp || '',
       d.kf || '',
@@ -72,7 +72,6 @@ function doPost(e) {
       panen && d.kelas ? 'Kelas ' + d.kelas : ''
     ];
     const r = sh.getLastRow() + 1;
-    sh.getRange(r, 7).setNumberFormat('@');           // NPK tetap teks (nol di depan tidak hilang)
     sh.getRange(r, 1, 1, row.length).setValues([row]);
     if (d.id) props.setProperty('sent_' + d.id, '1');
     return json_({ ok: true, foto: foto });
@@ -81,6 +80,21 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Jalankan sekali untuk memperbaiki NPK yang kehilangan nol di depan (mis. 81833 -> 0081833). */
+function fixNpk() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SHEET_RESP);
+  const rg = sh.getRange(2, 7, sh.getLastRow() - 1, 1);
+  const v = rg.getValues();
+  let n = 0;
+  const out = v.map(r => {
+    const s = String(r[0]).trim();
+    if (typeof r[0] === 'number' || (/^\d+$/.test(s) && s.length < 7)) { n++; return ["'" + pad_(r[0])]; }
+    return [r[0]];
+  });
+  rg.setValues(out);
+  Logger.log(n + ' NPK diperbaiki');
 }
 
 /* ---------- pembaca data ---------- */
